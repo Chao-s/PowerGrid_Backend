@@ -10,5 +10,5 @@ import org.springframework.data.annotation.Id;
 @NoArgsConstructor
 public class BaseNode {
     @Id //@GeneratedValue
-    private Long id;//开关ID号
+    private Long id;//开关ID号 （一般作为：约束/索引
 }

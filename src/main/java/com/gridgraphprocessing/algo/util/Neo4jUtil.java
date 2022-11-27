@@ -7,6 +7,7 @@ import org.neo4j.driver.types.Relationship;
 import org.neo4j.driver.util.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -24,7 +25,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
 
     private static final Logger log = LoggerFactory.getLogger(Neo4jUtil.class);
 
-//    @Autowired //复制过来后警告冒红
+    @Autowired
     @Lazy
     public void setNeo4jDriver(Driver neo4jDriver) {
         Neo4jUtil.neo4jDriver = neo4jDriver;
@@ -59,6 +60,19 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
             Result result = session.run(cypherSql);
             return result.list(mapper);
         }
+    }
+
+    //新增: 获取cypher语句的直接结果
+    public static List<Record> getRareResult(String cypherSql){
+        try (Session session = neo4jDriver.session()) {
+            log.debug(cypherSql);
+            Result result = session.run(cypherSql);
+            List<Record> records = result.list();
+            return records;
+        } catch (Exception e) {
+            log.error(e.getMessage());
+        }
+        return null;
     }
 
     /**

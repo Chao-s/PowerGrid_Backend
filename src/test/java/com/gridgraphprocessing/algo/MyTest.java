@@ -10,16 +10,17 @@ import com.gridgraphprocessing.algo.model.nariGraph.*;
 
 import com.gridgraphprocessing.algo.repository.graph.NodeRepository;
 import org.junit.jupiter.api.Test;
+import org.neo4j.driver.Record;
+import org.neo4j.driver.Result;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.Example;
 import org.springframework.data.neo4j.core.Neo4jTemplate;
 import org.springframework.data.neo4j.repository.query.QueryFragmentsAndParameters;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
+
+import static org.testcontainers.shaded.org.apache.commons.lang3.math.NumberUtils.min;
 
 
 @SpringBootTest
@@ -32,6 +33,18 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
     AutoDeviceRepository autoDeviceRepository;
 
 
+    <T>void printCollection(Collection<T>  collection){
+        System.out.println(collection.size()+" in all");
+        int i=1,max=10;
+        for(T device:collection){
+            System.out.println(device);
+            if(i>=max){
+                break;
+            }
+            i+=1;
+        }
+    }
+
     @Test
     void graphSaveTest() throws Exception {
         DmsBsDevice device = new DmsBsDevice();
@@ -42,24 +55,24 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
     }
 
     @Test
-    void graphGetTest(@Autowired Neo4jTemplate neo4jTemplate) throws Exception {
-//        //以下三个方法可以获取各子类，但遇到不能映射的子类会报错
-//        List<Device> devices = nodeRepository.findAll(Example.of(new Device()));
-////        List<Device> devices = nodeRepository.findAllDevices();
-////        List<Device> devices = neo4jTemplate.findAll(Device.class);
-//        int num = devices.size();
-//        System.out.println(num+" in all");
-//        for (BaseNode node:devices){
-//            System.out.println(node);
-//        }
-
-        System.out.println("___");
-
+    void graphFindOneTest(@Autowired Neo4jTemplate neo4jTemplate) throws Exception {
         //以下三个方法均可，没有标准映射类的节点会映射到相容的类上，搜不到则Optional方法会返回empty结果
-        Optional<Device> device = nodeRepository.findOne(Example.of(new Device(3800475135564444801L)));
+        Optional<Device> device = nodeRepository.findOne(Example.of(new Device(115404742196200620L)));
 //        Device device = nodeRepository.findCONDUCTIVEEQUIPMENTById(392L);
-//        Optional<Device> device = neo4jTemplate.findById(393L,Device.class);
-        System.out.println(device.toString());
+//        Optional<Device> device = neo4jTemplate.findById(115404742196200620L,Device.class);
+        System.out.println(device);
+    }
+
+    @Test
+    void graphFindAllTest(@Autowired Neo4jTemplate neo4jTemplate) throws Exception {
+        //在构建好图库中所有Device对应实体类前先用这个
+        List<Device> devices = nodeRepository.findAll(Example.of(new DmsCbDevice()));
+
+        //以下三个方法可以获取各子类，但遇到不能映射的子类会报错
+//        List<Device> devices = nodeRepository.findAll(Example.of(new Device()));
+//        List<Device> devices = nodeRepository.findAllDevices();
+//        List<Device> devices = neo4jTemplate.findAll(Device.class);
+        printCollection(devices);
     }
 
     @Test
@@ -107,9 +120,15 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
         }
     }
 
+    @Test
+    void upstreamSearchBySDNTest() throws Exception {
+        Set<Device> devices = nodeRepository.searchUpstream(3800475135564560470L);
+        System.out.println("___");
+        printCollection(devices);
+    }
 
-    @Test//试验中,目前有问题
-    void upstreamSearchTest() throws Exception {
+    @Test
+    void upstreamSearchByDriverTest() throws Exception {
         String cypherSqlFmt1 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s})," +
                 "(busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
                 "WITH targetCB, collect(busBarSections) AS endNodes\n" +
@@ -135,13 +154,14 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
         String cypherSql = String.format(cypherSqlFmt2, "3800475135564560470");
         List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql);
         System.out.println(cypherSql);
-        System.out.println(graphNodeList.size());
-        System.out.println(graphNodeList.toString());
-
+        System.out.println("___");
+        System.out.println(graphNodeList.size()+" in all as in List, Set shown as below:");
+        Set<HashMap<String, Object>> nodeSet = new HashSet<>(graphNodeList);
+        printCollection(nodeSet);
     }
 
-    @Test//试验中，目前有问题
-    void downstreamSearchTest() throws Exception {
+    @Test
+    void downstreamSearchByDriverTest() throws Exception {
         String cypherSqlFmt1 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s}),\n" +
                 "      (busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
                 "WITH targetCB, collect(busBarSections) AS endNodes\n" +
@@ -179,9 +199,15 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
                 "return nodes;";
         String cypherSql = String.format(cypherSqlFmt2, "3800475135564528897");
         List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql);
+        List<Record> records = Neo4jUtil.getRareResult(cypherSql);
         System.out.println(cypherSql);
-        System.out.println(graphNodeList.size());
-        System.out.println(graphNodeList.toString());
+        System.out.println("___");
+        printCollection(records);
+        System.out.println("___");
+        System.out.println(graphNodeList.size()+" in all as in List, Set shown as below:");
+        Set<HashMap<String, Object>> nodeSet = new HashSet<>(graphNodeList);
+        printCollection(nodeSet);
+        System.out.println(Neo4jUtil.isNeo4jOpen());
 
     }
 

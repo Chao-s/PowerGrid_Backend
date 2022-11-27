@@ -7,13 +7,14 @@ import com.gridgraphprocessing.algo.util.StringUtil;
 import com.gridgraphprocessing.algo.service.graph.DriverGraphService;
 import com.gridgraphprocessing.algo.util.JsonHelper;
 import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-@Repository
+@Service
 public class DriverGraphServiceImpl implements DriverGraphService {//需要修改后使用，仅仅将https://github.com/MiracleTanC/Neo4j-KGBuilder项目中的KGGraphRepository搬过来粗略调整了一下，目前仅提供思路
 
     /**

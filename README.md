@@ -10,7 +10,7 @@ nariGraph为南瑞数据库中实际上的实体类；直接在model/下的是�
 在util/Neo4JUtil，util裁剪自https://github.com/MiracleTanC/Neo4j-KGBuilder项目
   + 在上述高度封装的操作方法之外，考虑如何使用原生java neo4j API的方法和节点类型操纵neo4j
 + service/中，DriverGraphService仅将https://github.com/MiracleTanC/Neo4j-KGBuilder中的KGGraphRepository进行搬运和粗略调整；\
-SDNGraphService计划通过Neo4jTemplate（SDN的底层）/NodeRepository实现通用的crud
+而SDNGraphService计划通过Neo4jTemplate（SDN的底层）/NodeRepository实现通用的crud
 + MyTest/中为各方法的测试（没有事务回滚，需在测试环境中运行），先在此处测试后再搬至项目中，其中添加自动化开关的方法运行过慢，\
 需要在批量处理减少数据库连接等方面进行优化，读取自动化开关的方式也可写自定义sql优化；\
 上下游搜索算法未实现，直接搬带换行的cypher语句不知道如何执行
@@ -18,7 +18,10 @@ SDNGraphService计划通过Neo4jTemplate（SDN的底层）/NodeRepository实现�
 
 ## 主要任务
 + 利用现有的通用SDN操作(NodeRepository/Neo4jTemplate)或原生java neo4j API实现操作节点，写上下游搜索算法
+  + https://neo4j.com/docs/api/java-driver/4.4/
+  + https://github.com/neo4j/neo4j-documentation/blob/4.4/embedded-examples/src/main/java/org/neo4j/examples/socnet/Person.java
 + 实现自动化开关添加方法的优化（目前慢到根本跑不完）
++ 实体类的完善（优先级不高）
 
 ## maybe we could try（不是主要矛盾）
 + 对各实体类的通用crud方法（已通过类继承大体实现）的其他可能实现方式

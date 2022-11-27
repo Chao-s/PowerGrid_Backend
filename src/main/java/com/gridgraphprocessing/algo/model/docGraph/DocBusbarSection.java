@@ -5,11 +5,14 @@ import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.neo4j.core.schema.Property;
 
-//@Node("BUSBARSECTION")//发电机组表411
+/**
+ * @description 母线表410
+ */
+//@Node("BUSBARSECTION")
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class BusbarSection implements DocDevice {
+public class DocBusbarSection implements DocDevice {
     @Id
     private String id;//设备文件中要求类型为String（约束/索引
 
