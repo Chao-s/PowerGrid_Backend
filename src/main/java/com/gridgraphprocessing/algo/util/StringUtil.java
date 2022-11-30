@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public class StringUtil {
+public class StringUtil {//参考https://github.com/MiracleTanC/Neo4j-KGBuilder
 	 /*
 	 * 是否为空字符串
      * @param str

@@ -1,6 +1,7 @@
 package com.gridgraphprocessing.algo.util;
 
 import org.neo4j.driver.*;
+import org.neo4j.driver.types.Entity;
 import org.neo4j.driver.types.Node;
 import org.neo4j.driver.types.Path;
 import org.neo4j.driver.types.Relationship;
@@ -20,6 +21,8 @@ import java.util.stream.Collectors;
 @Component
 @Lazy(false)
 public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/MiracleTanC/Neo4j-KGBuilder项目中Neo4JUtil搬过来
+    //默认执行方式均为auto-commit方式(session.run())，call {} in transactions和periodic commit的语句必须用auto-commit执行
+    //注意：原方法用uuid接受entity.id()，现为表述清晰，全部改为internalId，但DriverGraphService中仍存在uuid，其属性含义有待判断
 
     private static Driver neo4jDriver;
 
@@ -29,6 +32,11 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
     @Lazy
     public void setNeo4jDriver(Driver neo4jDriver) {
         Neo4jUtil.neo4jDriver = neo4jDriver;
+    }
+
+    @Override
+    public void close() throws Exception {
+        neo4jDriver.close();
     }
 
     /**
@@ -54,7 +62,20 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         }
     }
 
-    public <T> List<T> readCyphers(String cypherSql, Function<Record, T> mapper) {
+    public static boolean batchRunCypherWithTx(List<String> cyphers) {//避免频繁的数据库连接
+        Session session = neo4jDriver.session();
+        try (Transaction tx = session.beginTransaction()) {
+            for (String cypher : cyphers) {
+                tx.run(cypher);
+            }
+        } catch (Exception e) {
+            log.info(e.getMessage());
+            return false;
+        }
+        return true;
+    }
+
+    public <T> List<T> readCyphers(String cypherSql, Function<Record, T> mapper) {//可改善
         try (Session session = neo4jDriver.session()) {
             log.debug(cypherSql);
             Result result = session.run(cypherSql);
@@ -63,16 +84,34 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
     }
 
     //新增: 获取cypher语句的直接结果
-    public static List<Record> getRareResult(String cypherSql){
+    public static List<Record> getRareRecords(String cypherSql){
         try (Session session = neo4jDriver.session()) {
             log.debug(cypherSql);
-            Result result = session.run(cypherSql);
-            List<Record> records = result.list();
-            return records;
+            return session.run(cypherSql).list();
         } catch (Exception e) {
             log.error(e.getMessage());
         }
         return null;
+    }
+
+    public static HashMap<String,Object>nodeToMap(Node node,String internalId){
+        HashMap<String, Object> map = new HashMap<String, Object>();
+        Map<String, Object> nodeMap = node.asMap();
+        for (Entry<String, Object> entry : nodeMap.entrySet()) {
+            String key = entry.getKey();
+            map.put(key, entry.getValue());
+        }
+        map.put("internalId", internalId);
+        return map;
+    }
+
+    public static HashMap<String,Object>nodeToMap(Node node){
+        String internalId = getInernalId(node);
+        return nodeToMap(node,internalId);
+    }
+
+    public static String getInernalId(Entity entity){
+        return String.valueOf(entity.id());
     }
 
     /**
@@ -81,30 +120,47 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
      * @param cypherSql cypherSql
      */
     public static List<HashMap<String, Object>> getGraphNode(String cypherSql) {
+        return getGraphNode(cypherSql,true);
+    }
+
+    public static <T>void addNodeNotDuplicate(Collection<T> collection,Node node,Set<String> keysSet){
+        String internalId = getInernalId(node);
+        if(!keysSet.contains(internalId)){
+            keysSet.add(internalId);
+            collection.add((T)nodeToMap(node,internalId));
+        }
+    }
+
+    public static List<HashMap<String, Object>> getGraphNode(String cypherSql,boolean matchNodeTypeOnly){//默认去重
         List<HashMap<String, Object>> ents = new ArrayList<HashMap<String, Object>>();
+        Set<String> keysSet = new HashSet<String>();
         try (Session session = neo4jDriver.session()) {
             log.debug(cypherSql);
             Result result = session.run(cypherSql);
             if (result.hasNext()) {
                 List<Record> records = result.list();
                 for (Record recordItem : records) {
-                    List<Pair<String, Value>> f = recordItem.fields();
-                    for (Pair<String, Value> pair : f) {
-                        HashMap<String, Object> rss = new HashMap<String, Object>();
-                        String typeName = pair.value().type().name();
+//                    List<Pair<String, Value>> f = recordItem.fields();
+                    for (Value value : recordItem.values()) {
+                        String typeName = value.type().name();
                         if (typeName.equals("NODE")) {
-                            Node noe4jNode = pair.value().asNode();
-                            String uuid = String.valueOf(noe4jNode.id());
-                            Map<String, Object> map = noe4jNode.asMap();
-                            for (Entry<String, Object> entry : map.entrySet()) {
-                                String key = entry.getKey();
-                                rss.put(key, entry.getValue());
+                            addNodeNotDuplicate(ents,value.asNode(),keysSet);
+                        }else if(!matchNodeTypeOnly){
+                            if ("PATH".equals(typeName)) {
+                                Path path = value.asPath();
+                                for (Node node : path.nodes()) {
+                                    addNodeNotDuplicate(ents,node,keysSet);
+                                }
+                            } else if (typeName.contains("LIST")) {
+                                Iterable<Value> vals=value.values();
+                                for(Value val:vals){
+                                    if(val.type().name().equals("NODE")){
+                                        addNodeNotDuplicate(ents,val.asNode(),keysSet);
+                                    }
+                                }
                             }
-                            rss.put("uuid", uuid);
-                            ents.add(rss);
                         }
                     }
-
                 }
             }
         } catch (Exception e) {
@@ -112,6 +168,8 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         }
         return ents;
     }
+
+    //————————————————————————————————————————以下方法均没有经过验证——————————————————————————————————————————————————————
 
     /**
      * 获取数据库索引
@@ -257,7 +315,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                         String typeName = pair.value().type().name();
                         if (typeName.equals("RELATIONSHIP")) {
                             Relationship rship = pair.value().asRelationship();
-                            String uuid = String.valueOf(rship.id());
+                            String internalId = String.valueOf(rship.id());
                             String sourceId = String.valueOf(rship.startNodeId());
                             String targetId = String.valueOf(rship.endNodeId());
                             Map<String, Object> map = rship.asMap();
@@ -265,7 +323,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                 String key = entry.getKey();
                                 rss.put(key, entry.getValue());
                             }
-                            rss.put("uuid", uuid);
+                            rss.put("internalId", internalId);
                             rss.put("sourceId", sourceId);
                             rss.put("targetId", targetId);
                             ents.add(rss);
@@ -281,7 +339,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
 
 
     /**
-     * 获取值类型的结果,如count,uuid
+     * 获取值类型的结果,如count,internalId
      *
      * @return 1 2 3 等数字类型
      */
@@ -317,7 +375,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                 List<Record> records = result.list();
                 List<HashMap<String, Object>> ents = new ArrayList<HashMap<String, Object>>();
                 List<HashMap<String, Object>> ships = new ArrayList<HashMap<String, Object>>();
-                List<String> uuids = new ArrayList<String>();
+                List<String> internalIds = new ArrayList<String>();
                 for (Record recordItem : records) {
                     List<Pair<String, Value>> f = recordItem.fields();
                     for (Pair<String, Value> pair : f) {
@@ -330,21 +388,21 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                         if ("NODE".equals(typeName)) {
                             Node noe4jNode = pair.value().asNode();
                             Map<String, Object> map = noe4jNode.asMap();
-                            String uuid = String.valueOf(noe4jNode.id());
-                            if (!uuids.contains(uuid)) {
+                            String internalId = String.valueOf(noe4jNode.id());
+                            if (!internalIds.contains(internalId)) {
                                 for (Entry<String, Object> entry : map.entrySet()) {
                                     String key = entry.getKey();
                                     rss.put(key, entry.getValue());
                                 }
-                                rss.put("uuid", uuid);
-                                uuids.add(uuid);
+                                rss.put("internalId", internalId);
+                                internalIds.add(internalId);
                             }
                             if (!rss.isEmpty()) {
                                 ents.add(rss);
                             }
                         } else if ("RELATIONSHIP".equals(typeName)) {
                             Relationship rship = pair.value().asRelationship();
-                            String uuid = String.valueOf(rship.id());
+                            String internalId = String.valueOf(rship.id());
                             String sourceId = String.valueOf(rship.startNodeId());
                             String targetId = String.valueOf(rship.endNodeId());
                             Map<String, Object> map = rship.asMap();
@@ -352,7 +410,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                 String key = entry.getKey();
                                 rShips.put(key, entry.getValue());
                             }
-                            rShips.put("uuid", uuid);
+                            rShips.put("internalId", internalId);
                             rShips.put("sourceId", sourceId);
                             rShips.put("targetId", targetId);
                             ships.add(rShips);
@@ -360,15 +418,15 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                             Path path = pair.value().asPath();
                             for (Node nodeItem : path.nodes()) {
                                 Map<String, Object> map = nodeItem.asMap();
-                                String uuid = String.valueOf(nodeItem.id());
+                                String internalId = String.valueOf(nodeItem.id());
                                 rss = new HashMap<String, Object>();
-                                if (!uuids.contains(uuid)) {
+                                if (!internalIds.contains(internalId)) {
                                     for (Entry<String, Object> entry : map.entrySet()) {
                                         String key = entry.getKey();
                                         rss.put(key, entry.getValue());
                                     }
-                                    rss.put("uuid", uuid);
-                                    uuids.add(uuid);
+                                    rss.put("internalId", internalId);
+                                    internalIds.add(internalId);
                                 }
                                 if (!rss.isEmpty()) {
                                     ents.add(rss);
@@ -376,7 +434,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                             }
                             for (Relationship next : path.relationships()) {
                                 rShips = new HashMap<String, Object>();
-                                String uuid = String.valueOf(next.id());
+                                String internalId = String.valueOf(next.id());
                                 String sourceId = String.valueOf(next.startNodeId());
                                 String targetId = String.valueOf(next.endNodeId());
                                 Map<String, Object> map = next.asMap();
@@ -384,7 +442,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                     String key = entry.getKey();
                                     rShips.put(key, entry.getValue());
                                 }
-                                rShips.put("uuid", uuid);
+                                rShips.put("internalId", internalId);
                                 rShips.put("sourceId", sourceId);
                                 rShips.put("targetId", targetId);
                                 ships.add(rShips);
@@ -395,7 +453,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                             String type = next.type().name();
                             if ("RELATIONSHIP".equals(type)) {
                                 Relationship rship = next.asRelationship();
-                                String uuid = String.valueOf(rship.id());
+                                String internalId = String.valueOf(rship.id());
                                 String sourceId = String.valueOf(rship.startNodeId());
                                 String targetId = String.valueOf(rship.endNodeId());
                                 Map<String, Object> map = rship.asMap();
@@ -403,7 +461,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                     String key = entry.getKey();
                                     rShips.put(key, entry.getValue());
                                 }
-                                rShips.put("uuid", uuid);
+                                rShips.put("internalId", internalId);
                                 rShips.put("sourceId", sourceId);
                                 rShips.put("targetId", targetId);
                                 ships.add(rShips);
@@ -649,13 +707,13 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                 String typeName = f.value().type().name();
                 if ("NODE".equals(typeName)) {
                     Node noe4jNode = f.value().asNode();
-                    String uuid = String.valueOf(noe4jNode.id());
+                    String internalId = String.valueOf(noe4jNode.id());
                     Map<String, Object> map = noe4jNode.asMap();
                     for (Entry<String, Object> entry : map.entrySet()) {
                         String key = entry.getKey();
                         ret.put(key, entry.getValue());
                     }
-                    ret.put("uuid", uuid);
+                    ret.put("internalId", internalId);
                 }
             }
         } catch (Exception e) {
@@ -664,18 +722,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         return ret;
     }
 
-    public static boolean batchRunCypherWithTx(List<String> cyphers) {
-        Session session = neo4jDriver.session();
-        try (Transaction tx = session.beginTransaction()) {
-            for (String cypher : cyphers) {
-                tx.run(cypher);
-            }
-        } catch (Exception e) {
-            log.info(e.getMessage());
-            return false;
-        }
-        return true;
-    }
+
 
 
     public static List<HashMap<String, Object>> toDistinctList(List<HashMap<String, Object>> list) {
@@ -683,20 +730,14 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         Iterator<HashMap<String, Object>> it = list.iterator();
         while (it.hasNext()) {
             HashMap<String, Object> map = it.next();
-            String uuid = (String) map.get("uuid");
+            String internalId = (String) map.get("internalId");
             int beforeSize = keysSet.size();
-            keysSet.add(uuid);
+            keysSet.add(internalId);
             int afterSize = keysSet.size();
             if (afterSize != (beforeSize + 1)) {
                 it.remove();
             }
         }
         return list;
-    }
-
-
-    @Override
-    public void close() throws Exception {
-        neo4jDriver.close();
     }
 }

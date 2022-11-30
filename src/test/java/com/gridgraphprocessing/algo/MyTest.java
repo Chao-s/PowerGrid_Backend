@@ -12,6 +12,9 @@ import com.gridgraphprocessing.algo.repository.graph.NodeRepository;
 import org.junit.jupiter.api.Test;
 import org.neo4j.driver.Record;
 import org.neo4j.driver.Result;
+import org.neo4j.driver.Value;
+import org.neo4j.driver.types.Node;
+import org.neo4j.driver.util.Pair;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.Example;
@@ -19,6 +22,7 @@ import org.springframework.data.neo4j.core.Neo4jTemplate;
 import org.springframework.data.neo4j.repository.query.QueryFragmentsAndParameters;
 
 import java.util.*;
+import java.util.function.Function;
 
 import static org.testcontainers.shaded.org.apache.commons.lang3.math.NumberUtils.min;
 
@@ -36,8 +40,21 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
     <T>void printCollection(Collection<T>  collection){
         System.out.println(collection.size()+" in all");
         int i=1,max=10;
-        for(T device:collection){
-            System.out.println(device);
+        for(T element:collection){
+            System.out.println(element);
+            if(i>=max){
+                break;
+            }
+            i+=1;
+        }
+    }
+
+    <T>void printCollection(Collection<T>  collection, Function<T,Collection<Map<String,Object>>> function){
+        System.out.println(collection.size()+" in all");
+        int i=1,max=10;
+        for(T element:collection){
+            System.out.println("raw: "+element);
+            System.out.println("derived: "+function.apply(element));
             if(i>=max){
                 break;
             }
@@ -152,12 +169,12 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
                 "MATCH (n:DMS_CB_DEVICE)  where n in cbs and n <> targetCB\n" +
                 "return n;";
         String cypherSql = String.format(cypherSqlFmt2, "3800475135564560470");
-        List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql);
+        List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql,false);
         System.out.println(cypherSql);
         System.out.println("___");
-        System.out.println(graphNodeList.size()+" in all as in List, Set shown as below:");
-        Set<HashMap<String, Object>> nodeSet = new HashSet<>(graphNodeList);
-        printCollection(nodeSet);
+//        System.out.println(graphNodeList.size()+" in all as in List, Set shown as below:");
+//        Set<HashMap<String, Object>> nodeSet = new HashSet<>(graphNodeList);
+        printCollection(graphNodeList);
     }
 
     @Test
@@ -197,18 +214,76 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
                 "                                       relationshipFilter: 'CONNECT_WITH', endNodes: endNodes})\n" +
                 "YIELD nodes\n" +
                 "return nodes;";
-        String cypherSql = String.format(cypherSqlFmt2, "3800475135564528897");
-        List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql);
-        List<Record> records = Neo4jUtil.getRareResult(cypherSql);
+        System.out.println(Neo4jUtil.isNeo4jOpen());
+        String cypherSql = String.format(cypherSqlFmt1, "3800475135564528897");
+        List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql,false);
         System.out.println(cypherSql);
         System.out.println("___");
-        printCollection(records);
-        System.out.println("___");
-        System.out.println(graphNodeList.size()+" in all as in List, Set shown as below:");
-        Set<HashMap<String, Object>> nodeSet = new HashSet<>(graphNodeList);
-        printCollection(nodeSet);
-        System.out.println(Neo4jUtil.isNeo4jOpen());
+        printCollection(graphNodeList);
 
+    }
+
+    @Test
+    void downstreamSearchByCostomFunctionTest() throws Exception {
+        String cypherSqlFmt1 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s}),\n" +
+                "      (busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
+                "WITH targetCB, collect(busBarSections) AS endNodes\n" +
+                "CALL apoc.path.spanningTree(targetCB, {endNodes: endNodes, relationshipFilter: 'POWER_CONNECT', limit : 2})\n" +
+                "YIELD path\n" +
+                "with nodes(path) as upstreamNodes, targetCB\n" +
+                "match (targetCB),\n" +
+                "      (disconnectCb:DMS_CB_DEVICE), (lds: DMS_LD_DEVICE), (trs: DMS_TR_DEVICE)\n" +
+                "  where (disconnectCb.point = 0 or disconnectCb.point = -1) and disconnectCb.feeder_id = targetCB.feeder_id\n" +
+                "  and lds.feeder_id = targetCB.feeder_id and trs.feeder_id = targetCB.feeder_id\n" +
+                "with targetCB, [disconnectCb, lds, trs] as endNodes, upstreamNodes\n" +
+                "call apoc.path.spanningTree(targetCB, {endNodes: endNodes, blacklistNodes: upstreamNodes,\n" +
+                "                                        bfs: true, relationshipFilter: 'CONNECT_WITH'})\n" +
+                "yield path\n" +
+                "return path;";
+
+        String cypherSqlFmt2 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s}),\n" +
+                "      (busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
+                "WITH targetCB, collect(busBarSections) AS endNodes\n" +
+                "CALL apoc.path.spanningTree(targetCB, {endNodes: endNodes, relationshipFilter: 'POWER_CONNECT', limit : 2})\n" +
+                "YIELD path\n" +
+                "with nodes(path) as upstreamNodes, targetCB\n" +
+                "match (targetCB),\n" +
+                "      (disconnectCb:DMS_CB_DEVICE), (lds: DMS_LD_DEVICE), (trs: DMS_TR_DEVICE)\n" +
+                "  where (disconnectCb.point = 0 or disconnectCb.point = -1) and disconnectCb.feeder_id = targetCB.feeder_id\n" +
+                "  and lds.feeder_id = targetCB.feeder_id and trs.feeder_id = targetCB.feeder_id\n" +
+                "with targetCB, [disconnectCb, lds, trs] as endNodes, upstreamNodes\n" +
+                "call apoc.path.spanningTree(targetCB, {endNodes: endNodes, blacklistNodes: upstreamNodes,\n" +
+                "                                        bfs: true, relationshipFilter: 'CONNECT_WITH'})\n" +
+                "yield path\n" +
+                "with nodes(path) as downStreamNodes, targetCB, endNodes\n" +
+                "call apoc.path.subgraphAll(targetCB, {whitelistNodes: downStreamNodes,\n" +
+                "                                       relationshipFilter: 'CONNECT_WITH', endNodes: endNodes})\n" +
+                "YIELD nodes\n" +
+                "return nodes;";
+        System.out.println(Neo4jUtil.isNeo4jOpen());
+        String cypherSql = String.format(cypherSqlFmt2, "3800475135564528897");
+        List<Record> recordList = Neo4jUtil.getRareRecords(cypherSql);
+        assert recordList != null;
+        Set<Record> records = new HashSet<>(recordList);
+        System.out.println(cypherSql);
+        System.out.println("___");
+        printCollection(records,(record -> {
+            Set<Map<String, Object>> ents = new HashSet<Map<String, Object>>();
+            List<Pair<String, Value>> f = record.fields();
+            System.out.println(f.size());
+            for (Pair<String, Value> pair : f) {
+                HashMap<String, Object> rss = new HashMap<String, Object>();
+                String typeName = pair.value().type().name();
+                System.out.println(typeName);
+                List<Value> values = pair.value().asList(o->o);
+                for (Value value:values){
+                    if (value.type().name().equals("NODE")) {
+                        ents.add(Neo4jUtil.nodeToMap(value.asNode()));
+                    }
+                }
+            }
+            return ents;
+        }));
     }
 
 

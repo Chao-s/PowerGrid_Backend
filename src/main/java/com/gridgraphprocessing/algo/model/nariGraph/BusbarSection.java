@@ -23,7 +23,6 @@ public class BusbarSection extends Device implements EMS {
 //    @Id //@GeneratedValue
 //    private Long id;//开关ID号（约束/索引
 
-    @Property
     private String name;//名称
 
     @Property("st_id")
@@ -32,17 +31,15 @@ public class BusbarSection extends Device implements EMS {
     @Property("bv_id")
     private Long bvId;//电压类型ID（索引
 
-    @Property
     private Long nd;//节点号
 
     @Property("bs_type")
     private Long bsType;//母线类型
 
-    @Property
     private Double v;//线电压
 
-    @Property
-    private Long v_qual;//线电压质量码
+    @Property("v_qual")
+    private Long vQual;//线电压质量码
 
     @Property("component_id")
     private Long componentId;

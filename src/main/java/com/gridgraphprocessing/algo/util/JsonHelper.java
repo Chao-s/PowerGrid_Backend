@@ -15,7 +15,7 @@ import java.util.ArrayList;
  * json工具类
  * @author yindm
  */
-public class JsonHelper {
+public class JsonHelper {//参考https://github.com/MiracleTanC/Neo4j-KGBuilder
     private static ObjectMapper mapper;
 
     static {
