@@ -83,8 +83,8 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         }
     }
 
-    //新增: 获取cypher语句的直接结果
-    public static List<Record> getRareRecords(String cypherSql){
+    //获取cypher语句的直接结果
+    public static List<Record> getRareRecords(String cypherSql){//返回Result时报错，说已经被消费掉、传出去
         try (Session session = neo4jDriver.session()) {
             log.debug(cypherSql);
             return session.run(cypherSql).list();

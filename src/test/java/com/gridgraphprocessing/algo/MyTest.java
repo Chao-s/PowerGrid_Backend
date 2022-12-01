@@ -5,6 +5,7 @@ import com.gridgraphprocessing.algo.model.nariGraph.Device;
 import com.gridgraphprocessing.algo.model.nariGraph.DmsBsDevice;
 import com.gridgraphprocessing.algo.model.nariGraph.DmsCbDevice;
 import com.gridgraphprocessing.algo.repository.AutoDeviceRepository;
+import com.gridgraphprocessing.algo.service.graph.util.GraphSearchUtil;
 import com.gridgraphprocessing.algo.util.Neo4jUtil;
 import com.gridgraphprocessing.algo.model.nariGraph.*;
 
@@ -24,6 +25,7 @@ import org.springframework.data.neo4j.repository.query.QueryFragmentsAndParamete
 import java.util.*;
 import java.util.function.Function;
 
+import static com.gridgraphprocessing.algo.util.PrintUtil.printCollection;
 import static org.testcontainers.shaded.org.apache.commons.lang3.math.NumberUtils.min;
 
 
@@ -37,30 +39,7 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
     AutoDeviceRepository autoDeviceRepository;
 
 
-    <T>void printCollection(Collection<T>  collection){
-        System.out.println(collection.size()+" in all");
-        int i=1,max=10;
-        for(T element:collection){
-            System.out.println(element);
-            if(i>=max){
-                break;
-            }
-            i+=1;
-        }
-    }
 
-    <T>void printCollection(Collection<T>  collection, Function<T,Collection<Map<String,Object>>> function){
-        System.out.println(collection.size()+" in all");
-        int i=1,max=10;
-        for(T element:collection){
-            System.out.println("raw: "+element);
-            System.out.println("derived: "+function.apply(element));
-            if(i>=max){
-                break;
-            }
-            i+=1;
-        }
-    }
 
     @Test
     void graphSaveTest() throws Exception {
@@ -146,81 +125,12 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
 
     @Test
     void upstreamSearchByDriverTest() throws Exception {
-        String cypherSqlFmt1 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s})," +
-                "(busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
-                "WITH targetCB, collect(busBarSections) AS endNodes\n" +
-                "CALL apoc.path.spanningTree(targetCB, {endNodes: endNodes, relationshipFilter: 'POWER_CONNECT', limit : 2})\n" +
-                "YIELD path\n" +
-                "with nodes(path) as upstreamPathNodes, targetCB\n" +
-                "call apoc.path.subgraphAll(targetCB, {whitelistNodes: upstreamPathNodes, labelFilter: '/DMS_CB_DEVICE'})\n" +
-                "yield nodes\n" +
-                "return nodes;";
-
-        String cypherSqlFmt2 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s})," +
-                "(busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
-                "WITH targetCB, collect(busBarSections) AS endNodes\n" +
-                "CALL apoc.path.spanningTree(targetCB, {endNodes: endNodes, relationshipFilter: 'CONNECT_WITH', limit : 2})\n" +
-                "YIELD path\n" +
-                "WITH nodes(path) AS pathNodes, targetCB\n" +
-                "match (cbEnd: DMS_CB_DEVICE) where cbEnd in pathNodes\n" +
-                "call apoc.path.spanningTree(targetCB, {whiteListNodes: pathNodes, relationshipFilter: 'CONNECT_WITH', terminatorNodes: cbEnd,  limit : 1})\n" +
-                "yield path as res\n" +
-                "with nodes(res) as cbs, targetCB\n" +
-                "MATCH (n:DMS_CB_DEVICE)  where n in cbs and n <> targetCB\n" +
-                "return n;";
-        String cypherSql = String.format(cypherSqlFmt2, "3800475135564560470");
-        List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql,false);
-        System.out.println(cypherSql);
-        System.out.println("___");
-//        System.out.println(graphNodeList.size()+" in all as in List, Set shown as below:");
-//        Set<HashMap<String, Object>> nodeSet = new HashSet<>(graphNodeList);
-        printCollection(graphNodeList);
+        GraphSearchUtil.upstreamSearch("3800475135564560470");
     }
 
     @Test
     void downstreamSearchByDriverTest() throws Exception {
-        String cypherSqlFmt1 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s}),\n" +
-                "      (busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
-                "WITH targetCB, collect(busBarSections) AS endNodes\n" +
-                "CALL apoc.path.spanningTree(targetCB, {endNodes: endNodes, relationshipFilter: 'POWER_CONNECT', limit : 2})\n" +
-                "YIELD path\n" +
-                "with nodes(path) as upstreamNodes, targetCB\n" +
-                "match (targetCB),\n" +
-                "      (disconnectCb:DMS_CB_DEVICE), (lds: DMS_LD_DEVICE), (trs: DMS_TR_DEVICE)\n" +
-                "  where (disconnectCb.point = 0 or disconnectCb.point = -1) and disconnectCb.feeder_id = targetCB.feeder_id\n" +
-                "  and lds.feeder_id = targetCB.feeder_id and trs.feeder_id = targetCB.feeder_id\n" +
-                "with targetCB, [disconnectCb, lds, trs] as endNodes, upstreamNodes\n" +
-                "call apoc.path.spanningTree(targetCB, {endNodes: endNodes, blacklistNodes: upstreamNodes,\n" +
-                "                                        bfs: true, relationshipFilter: 'CONNECT_WITH'})\n" +
-                "yield path\n" +
-                "return path;";
-
-        String cypherSqlFmt2 = "MATCH (targetCB:DMS_CB_DEVICE{id: %s}),\n" +
-                "      (busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
-                "WITH targetCB, collect(busBarSections) AS endNodes\n" +
-                "CALL apoc.path.spanningTree(targetCB, {endNodes: endNodes, relationshipFilter: 'POWER_CONNECT', limit : 2})\n" +
-                "YIELD path\n" +
-                "with nodes(path) as upstreamNodes, targetCB\n" +
-                "match (targetCB),\n" +
-                "      (disconnectCb:DMS_CB_DEVICE), (lds: DMS_LD_DEVICE), (trs: DMS_TR_DEVICE)\n" +
-                "  where (disconnectCb.point = 0 or disconnectCb.point = -1) and disconnectCb.feeder_id = targetCB.feeder_id\n" +
-                "  and lds.feeder_id = targetCB.feeder_id and trs.feeder_id = targetCB.feeder_id\n" +
-                "with targetCB, [disconnectCb, lds, trs] as endNodes, upstreamNodes\n" +
-                "call apoc.path.spanningTree(targetCB, {endNodes: endNodes, blacklistNodes: upstreamNodes,\n" +
-                "                                        bfs: true, relationshipFilter: 'CONNECT_WITH'})\n" +
-                "yield path\n" +
-                "with nodes(path) as downStreamNodes, targetCB, endNodes\n" +
-                "call apoc.path.subgraphAll(targetCB, {whitelistNodes: downStreamNodes,\n" +
-                "                                       relationshipFilter: 'CONNECT_WITH', endNodes: endNodes})\n" +
-                "YIELD nodes\n" +
-                "return nodes;";
-        System.out.println(Neo4jUtil.isNeo4jOpen());
-        String cypherSql = String.format(cypherSqlFmt1, "3800475135564528897");
-        List<HashMap<String, Object>> graphNodeList = Neo4jUtil.getGraphNode(cypherSql,false);
-        System.out.println(cypherSql);
-        System.out.println("___");
-        printCollection(graphNodeList);
-
+        GraphSearchUtil.downstreamSearch("3800475135564528897");
     }
 
     @Test
@@ -260,7 +170,6 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
                 "                                       relationshipFilter: 'CONNECT_WITH', endNodes: endNodes})\n" +
                 "YIELD nodes\n" +
                 "return nodes;";
-        System.out.println(Neo4jUtil.isNeo4jOpen());
         String cypherSql = String.format(cypherSqlFmt2, "3800475135564528897");
         List<Record> recordList = Neo4jUtil.getRareRecords(cypherSql);
         assert recordList != null;
@@ -286,6 +195,10 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
         }));
     }
 
-
-
+    //在此处写上下游搜索算法
+    @Test
+    void searchAlgorithm() throws Exception {
+        GraphSearchUtil.upstreamSearch("3800475135564560470");
+        GraphSearchUtil.downstreamSearch("3800475135564528897");
+    }
 }

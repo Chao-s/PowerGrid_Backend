@@ -14,7 +14,7 @@ nariGraph为南瑞数据库中实际上的实体类；直接在model/下的是�
 需要在批量处理减少数据库连接等方面进行优化，读取自动化开关的方式也可写自定义sql优化；\
 
 ## 主要任务
-+ 利用现有的通用SDN操作(NodeRepository/Neo4jTemplate)或java neo4j driver操作节点，参考MyTest中的使用方法示例写上下游搜索算法
++ 利用现有的通用SDN操作(NodeRepository/Neo4jTemplate)或neo4j-java-driver操作节点，参考MyTest中的使用方法示例写上下游搜索算法
   + https://neo4j.com/docs/api/java-driver/4.4/
   + https://github.com/neo4j/neo4j-documentation/blob/4.4/embedded-examples/src/main/java/org/neo4j/examples/socnet/Person.java
   + https://github.com/neo4j-examples/movies-java-bolt/blob/main/src/main/java/example/movies/backend/MovieService.java
@@ -24,7 +24,7 @@ nariGraph为南瑞数据库中实际上的实体类；直接在model/下的是�
   + https://neo4j.com/docs/java-reference/4.3/extending-neo4j/project-setup/
 + 实体类（包括各设备节点与关系）的完善（优先级不高），是否用map<String,Object>和projection机制尝试构建通用实体类
 + 有以下使用cypher查询的方法，用哪个好：
-  + 纯java neo4j driver：session+tx（目前的Neo4jUtil为driver最基本的使用方式）
+  + 纯neo4j-java-driver：session+tx（目前的Neo4jUtil为driver最基本的使用方式）
   + Cypher-DSL（可用用Neo4jTemplate执行Statement）
     + Statement statement = Cypher.match(shortestPath)\
       .with(p, listWith(name("n"))\
