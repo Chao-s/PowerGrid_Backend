@@ -1,20 +1,18 @@
 package com.gridgraphprocessing.algo;
 
-import com.gridgraphprocessing.algo.model.AutoDevice;
 import com.gridgraphprocessing.algo.model.nariGraph.Device;
 import com.gridgraphprocessing.algo.model.nariGraph.DmsBsDevice;
 import com.gridgraphprocessing.algo.model.nariGraph.DmsCbDevice;
 import com.gridgraphprocessing.algo.repository.AutoDeviceRepository;
-import com.gridgraphprocessing.algo.service.graph.util.GraphSearchUtil;
+import com.gridgraphprocessing.algo.service.graph.algo.GraphSearchAlgorithm;
 import com.gridgraphprocessing.algo.util.Neo4jUtil;
-import com.gridgraphprocessing.algo.model.nariGraph.*;
 
 import com.gridgraphprocessing.algo.repository.graph.NodeRepository;
 import org.junit.jupiter.api.Test;
 import org.neo4j.driver.Record;
-import org.neo4j.driver.Result;
 import org.neo4j.driver.Value;
 import org.neo4j.driver.types.Node;
+import org.neo4j.driver.types.Path;
 import org.neo4j.driver.util.Pair;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -23,20 +21,23 @@ import org.springframework.data.neo4j.core.Neo4jTemplate;
 import org.springframework.data.neo4j.repository.query.QueryFragmentsAndParameters;
 
 import java.util.*;
-import java.util.function.Function;
 
 import static com.gridgraphprocessing.algo.util.PrintUtil.printCollection;
+import static com.gridgraphprocessing.algo.util.PrintUtil.printListTreeWithMap;
 import static org.testcontainers.shaded.org.apache.commons.lang3.math.NumberUtils.min;
 
 
 @SpringBootTest
-public class MyTest {//注意，此处没有事务回滚，请在测试环境中跑以免污染数据
+public class MyTest {//注意，此处没有事务回滚，如果有write操作请在测试环境中跑以免污染数据；正式的测试需另写
 
     @Autowired
     NodeRepository nodeRepository;
 
     @Autowired
     AutoDeviceRepository autoDeviceRepository;
+
+    @Autowired
+    GraphSearchAlgorithm graphSearchAlgorithm;
 
 
 
@@ -76,7 +77,9 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
 //        Optional<AutoDevice> autoDevice = autoDeviceRepository.findById("3801319560578176491");
 //        System.out.println(autoDevice.toString());
 
-        System.out.println(autoDeviceRepository.existsById("3801319560578176491"));
+//        System.out.println(autoDeviceRepository.existsById("3801319560578176491"));
+//        System.out.println(autoDeviceRepository.existsByIsAutoAndId(1,"3801319560578176491"));
+        System.out.println(autoDeviceRepository.findIsAutoById("3801319560578176491"));
     }
 
     @Test//添加自动化开关
@@ -87,21 +90,22 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
         int i=1;
         System.out.println(num+" in all");
         for (DmsCbDevice cb:devices) {
-            Optional<AutoDevice> autoDevice = autoDeviceRepository.findById(cb.getId().toString());//此处不需要取全表，可以优化
-            if(autoDevice.isEmpty()||
-                    autoDevice.get().getIsAuto()<0||
-                    autoDevice.get().getIsAuto()>1){
+            Integer isAuto = autoDeviceRepository.findIsAutoById(cb.getId().toString());
+            if(isAuto==null){
                 cb.setIsAuto(-1L);
                 System.out.println("not hit !");
-            }else if(autoDevice.get().getIsAuto()==0){
+            }else if(isAuto==0){
                 cb.setIsAuto(0L);
-            }else{
+            }else if(isAuto==1){
                 cb.setIsAuto(1L);
+            }else{
+                throw new Exception("is_auto existed is neither 0 nor 1 !!!");
             }
             System.out.printf("%s/%s; %s:%s%n",i,num,cb.getId(),cb.getIsAuto());
 
+            //toDO 待总结与优化
             Map<String,Object> parameters = new HashMap<>();
-            parameters.put("id",cb.getId());
+            parameters.put(Neo4jUtil.getRealIdField(),cb.getId());
             parameters.put("is_auto",cb.getIsAuto());
             QueryFragmentsAndParameters queryFragmentsAndParameters =
                     new QueryFragmentsAndParameters(
@@ -125,12 +129,12 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
 
     @Test
     void upstreamSearchByDriverTest() throws Exception {
-        GraphSearchUtil.upstreamSearch("3800475135564560470");
+        graphSearchAlgorithm.searchUpstreamReturnPaths("3800475135564560470");
     }
 
     @Test
     void downstreamSearchByDriverTest() throws Exception {
-        GraphSearchUtil.downstreamSearch("3800475135564528897");
+        graphSearchAlgorithm.searchDownstreamReturnPaths("3800475135564528897");//3800475135564528897
     }
 
     @Test
@@ -171,7 +175,7 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
                 "YIELD nodes\n" +
                 "return nodes;";
         String cypherSql = String.format(cypherSqlFmt2, "3800475135564528897");
-        List<Record> recordList = Neo4jUtil.getRareRecords(cypherSql);
+        List<Record> recordList = Neo4jUtil.getRawRecords(cypherSql);
         assert recordList != null;
         Set<Record> records = new HashSet<>(recordList);
         System.out.println(cypherSql);
@@ -179,11 +183,11 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
         printCollection(records,(record -> {
             Set<Map<String, Object>> ents = new HashSet<Map<String, Object>>();
             List<Pair<String, Value>> f = record.fields();
-            System.out.println(f.size());
+//            System.out.println(f.size());
             for (Pair<String, Value> pair : f) {
                 HashMap<String, Object> rss = new HashMap<String, Object>();
                 String typeName = pair.value().type().name();
-                System.out.println(typeName);
+//                System.out.println(typeName);
                 List<Value> values = pair.value().asList(o->o);
                 for (Value value:values){
                     if (value.type().name().equals("NODE")) {
@@ -195,10 +199,24 @@ public class MyTest {//注意，此处没有事务回滚，请在测试环境中
         }));
     }
 
-    //在此处写上下游搜索算法
     @Test
-    void searchAlgorithm() throws Exception {
-        GraphSearchUtil.upstreamSearch("3800475135564560470");
-        GraphSearchUtil.downstreamSearch("3800475135564528897");
+    void getNodeTreeTest() throws Exception{//当cypher没有limit:2时返回路径非常多且有重复，故需要新的数据模型与搜索算法，此测试为路径的树结构建立与打印的测试
+        List<Path> paths = graphSearchAlgorithm.searchUpstreamReturnPaths("3800475135564528897");//"3800475135564528897" "3800475135564560470"
+        Map<Integer,LinkedList<Integer>> map = new HashMap<>();
+        List<Path> partOfPaths = new LinkedList<>(paths).subList(0, Math.min(paths.size(), 100));
+        List<HashMap<String, Object>> nodeTree = Neo4jUtil.getNodeTree(partOfPaths,map);
+        printListTreeWithMap(nodeTree,map, t->Neo4jUtil.getNodePriLabel(Neo4jUtil.getDeviceLabels(t)));
+
+    }
+
+    //    在此处测试上下游搜索算法
+    @Test
+    void  searchAlgorithm() throws Exception {
+        String faultId = "3800475135564528897";//"3800475135564528897" "3800475135564560470"
+        List<List<Node>> faultNodePaths = graphSearchAlgorithm.searchFaultUpstream(faultId);
+        //下游搜索
+        System.out.println();
+        System.out.println("__下游情况如下__");
+        List<List<Node>> UserEquipNodePaths = graphSearchAlgorithm.searchAffectedEquipDownstream(faultId);
     }
 }

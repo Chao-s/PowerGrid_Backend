@@ -1,13 +1,13 @@
-package com.gridgraphprocessing.algo;
+package com.gridgraphprocessing;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class AlgoApplication {
+public class GirdGraphApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(AlgoApplication.class, args);
+        SpringApplication.run(GirdGraphApplication.class, args);
     }
 
 }

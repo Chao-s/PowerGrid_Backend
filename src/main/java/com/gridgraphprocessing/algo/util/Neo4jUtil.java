@@ -18,15 +18,29 @@ import java.util.Map.Entry;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+
 @Component
 @Lazy(false)
 public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/MiracleTanC/Neo4j-KGBuilder项目中Neo4JUtil搬过来
-    //默认执行方式均为auto-commit方式(session.run())，call {} in transactions和periodic commit的语句必须用auto-commit执行
+    //默认执行方式均为auto-commit方式(session.run())，call {} in transactions(仅仅call的话没问题)和periodic commit的语句必须用auto-commit执行
     //注意：原方法用uuid接受entity.id()，现为表述清晰，全部改为internalId，但DriverGraphService中仍存在uuid，其属性含义有待判断
+    //所有传出neo4j底层type数据（Path/Node等）的方法都标记Raw，不要修改Path/Node这类底层type数据
 
     private static Driver neo4jDriver;
 
     private static final Logger log = LoggerFactory.getLogger(Neo4jUtil.class);
+
+    private static final String[] commonLabels = {"CONDUCTIVEEQUIPMENT","DMS","EMS"};//似乎说数组不要加final
+
+    private static final String internalIdField = "internalId";
+
+    private static final String labelsField = "labelStringIterator";
+
+    private static final String realIdField = "id";
+
+//    public static String getLabelsField(){return Neo4jUtil.labelsField;}
+
+    public static String getRealIdField(){return Neo4jUtil.realIdField;}
 
     @Autowired
     @Lazy
@@ -84,7 +98,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
     }
 
     //获取cypher语句的直接结果
-    public static List<Record> getRareRecords(String cypherSql){//返回Result时报错，说已经被消费掉、传出去
+    public static List<Record> getRawRecords(String cypherSql){//返回Result时报错，说已经被消费掉、传出去
         try (Session session = neo4jDriver.session()) {
             log.debug(cypherSql);
             return session.run(cypherSql).list();
@@ -94,6 +108,85 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         return null;
     }
 
+    public static<T> List<T> getRawRecords(String cypherSql,Function<Record,T> function){//返回Result时报错，说已经被消费掉、传出去
+        try (Session session = neo4jDriver.session()) {
+            log.debug(cypherSql);
+            return session.run(cypherSql).list(function);
+        } catch (Exception e) {
+            log.error(e.getMessage());
+        }
+        return null;
+    }
+
+    //路径可能重复
+    public static List<Path> getRawPaths(String cypherSql){
+        return Neo4jUtil.getRawRecords(cypherSql, record -> record.values().get(0).asPath());
+    }
+
+    //尽管set中路径本身不会重复，但路径之间仍有重复部分，可以用树结构返回，已有nodeTree方法
+    public static Set<Path> getRawPathSet(String cypherSql){
+        List<Path> paths = Neo4jUtil.getRawRecords(cypherSql, record -> record.values().get(0).asPath());
+        assert paths != null;
+        return new HashSet<>(paths);
+    }
+
+    public static List<HashMap<String,Object>> getNodeTree(String cypherSql,Map<Integer,LinkedList<Integer>> mapListToTree){
+        Collection<Path> paths = getRawPathSet(cypherSql);
+        return getNodeTree(paths,mapListToTree);
+    }
+
+    public static List<Node> getRawNodeTree(String cypherSql,Map<Integer,LinkedList<Integer>> mapListToTree){//传出原Node而不是Copy，但是一个语句的结果只能consume一次，乍一看不会出错
+        Collection<Path> paths = getRawPathSet(cypherSql);
+        return getRawNodeTree(paths,mapListToTree);
+    }
+
+    public static List<Node> getRawNodeTree(Collection<Path> paths,Map<Integer,LinkedList<Integer>> mapListToTree){
+        return getNodeTree(paths,mapListToTree,t->t);//要注意此处是直接t->t传出原Node而不是传出Copy
+    }
+
+    //暂时只想到三种实现方式实现树结构路径信息返回：1)返回树结构2)返回无重复节点数组+Map<指示数组内部树结构连接的索引>3)返回无重复节点数组+List<每条路径在数组中对应的位置数组>
+    //目前实现第二种方式，用Map记录数组中树结构连接的索引
+    //因为没搜到neo4j的tree返回方法而写了此方法，没细搜，有更好方案可以更换
+    public static <T> List<T> getNodeTree(Collection<Path> paths,Map<Integer,LinkedList<Integer>> mapListToTree,Function<Node,T> transFunc){//只能解析Tree，当前写法无法应对Net（可按注释另写实现，同时PrintUtil也要另写打印方法）
+        if(paths.isEmpty())return new ArrayList<>();
+        List<T> nodeTree = new ArrayList<>();
+        Set<Long> keysSet = new HashSet<>();
+        int treeIdx = -1;
+        Map<Long,Integer> idToIdx = new HashMap<>();
+        for(Path path:paths){
+            int branchIdx = -1;//路径必从同一节点开始，故必有branchIdx>=0
+            for (Node node : path.nodes()) {
+                boolean notDup = addNodeNotDuplicate(nodeTree,node,keysSet,transFunc);//使用节点内部id为key，因为外置id的字段可能变化
+                if(notDup){
+                    treeIdx++;
+                    idToIdx.put(node.id(),treeIdx);//就算存在回收机制，同一批path结果中的节点内部id应当也是不会重复的
+                    if(branchIdx!=-1){//!=-1意味着刚从重复进入不重复，此刻branchIdx指向分支点
+                        mapListToTree.putIfAbsent(branchIdx,new LinkedList<>(List.of(branchIdx+1)));
+                        mapListToTree.get(branchIdx).add(treeIdx);
+                        branchIdx=-1;
+                    }
+                }else {
+                    branchIdx = idToIdx.get(node.id());//亦可为：branchIdx = mapListToTree.containsKey(branchIdx)?idToIdx.get(node.id()):branchIdx+1;
+                }
+            }
+            mapListToTree.put(treeIdx,new LinkedList<>());//若默认已有路径的终点必不为分支点，则此处以空列表表示终点即可，不会在putIfAbsent处出错；否则应写为mapListToTree.putIfAbsent(treeIdx,new LinkedList<>());mapListToTree.get(treeIdx).add(-1);
+
+        }
+        return nodeTree;
+    }
+
+    public static List<HashMap<String,Object>> getNodeTree(Collection<Path> paths,Map<Integer,LinkedList<Integer>> mapListToTree){
+        return getNodeTree(paths,mapListToTree,Neo4jUtil::nodeToMap);
+    }
+
+    public static HashMap<Integer,LinkedList<Integer>> treeIdxMapDeepCopy(Map<Integer,LinkedList<Integer>> map){
+        HashMap<Integer,LinkedList<Integer>> mapCopy = new HashMap<>(map);
+        mapCopy.forEach((key,valList)->{
+            mapCopy.put(key, new LinkedList<>(valList));
+        });
+        return mapCopy;
+    }
+
     public static HashMap<String,Object>nodeToMap(Node node,String internalId){
         HashMap<String, Object> map = new HashMap<String, Object>();
         Map<String, Object> nodeMap = node.asMap();
@@ -101,17 +194,59 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
             String key = entry.getKey();
             map.put(key, entry.getValue());
         }
-        map.put("internalId", internalId);
+        map.put(Neo4jUtil.internalIdField, internalId);
+        map.put(Neo4jUtil.labelsField,node.labels());
         return map;
     }
 
     public static HashMap<String,Object>nodeToMap(Node node){
-        String internalId = getInernalId(node);
+        String internalId = getInternalId(node);
         return nodeToMap(node,internalId);
     }
 
-    public static String getInernalId(Entity entity){
+    public static String getInternalId(Entity entity){//该方法最大作用为把.id()显式地标记为图库内部ID，返回值不一定要是String
         return String.valueOf(entity.id());
+    }
+
+    public static String getNodeRealId(Node node){return String.valueOf(node.get(Neo4jUtil.realIdField).asLong());}//主要为了封装asLong的信息
+
+    public static String getNodePathFeature(List<Node> nodes,String delimiter){
+        return nodes.stream().map((Neo4jUtil::getNodeFeature)).collect(Collectors.joining(delimiter));
+    }
+
+    public static String getNodeFeature(Node node){
+        return String.format("[%s|id:%s]",getNodePriLabel(node.labels()),getNodeRealId(node));
+    }
+
+    public static String getDeviceFeature(HashMap<String,Object> device){
+        return String.format("[%s|id:%s]",getNodePriLabel(getDeviceLabels(device)),device.get(Neo4jUtil.realIdField));
+    }
+
+    public static String getDeviceToShow(HashMap<String,Object> device){return String.format("%s%s",getDeviceFeature(device),device);}
+
+    public static Iterable<String> getDeviceLabels(HashMap<String,Object> device){return (Iterable<String>) device.get(Neo4jUtil.labelsField);}
+
+    public static String getNodePriLabel(Iterable<String> labels){
+        for (String label:labels){
+            boolean getFeature = true;
+            for(String commonLabel:Neo4jUtil.commonLabels){
+                if(label.equals(commonLabel)){
+                    getFeature = false;
+                    break;
+                }
+            }
+            if(getFeature){
+                return label;
+            }
+        }
+        return labels.toString();
+    }
+
+    public static <T> boolean contains(Iterable<T> iterable,T element){
+        for (T tmp : iterable) {
+            if (tmp.equals(element)) return true;
+        }
+        return false;
     }
 
     /**
@@ -123,12 +258,40 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         return getGraphNode(cypherSql,true);
     }
 
-    public static <T>void addNodeNotDuplicate(Collection<T> collection,Node node,Set<String> keysSet){
-        String internalId = getInernalId(node);
+
+    public static <T,K> boolean addEntityNotDuplicate(Collection<T> collection,Entity element,Set<K> keysSet,Function<Entity,K> keyFunc,Function<Entity,T> transFunc){
+        K key = keyFunc.apply(element);
+        if(!keysSet.contains(key)){
+            keysSet.add(key);
+            collection.add(transFunc.apply(element));
+            return true;
+        }
+        return false;
+    }
+
+    public static <T,K> boolean addNodeNotDuplicate(Collection<T> collection,Node element,Set<K> keysSet,Function<Entity,K> keyFunc,Function<Node,T> transFunc){
+        K key = keyFunc.apply(element);
+        if(!keysSet.contains(key)){
+            keysSet.add(key);
+            collection.add(transFunc.apply(element));
+            return true;
+        }
+        return false;
+    }
+
+    public static <T> boolean addNodeNotDuplicate(Collection<T> collection,Node element,Set<Long> keysSet,Function<Node,T> transFunc){
+        return addNodeNotDuplicate(collection,element,keysSet,Entity::id,transFunc);
+    }
+
+    public static boolean addNodeNotDuplicate(Collection<HashMap<String,Object>> collection,Node node,Set<String> keysSet){
+//        return addEntityNotDuplicate(collection,node,keysSet,Neo4jUtil::getInternalId,o->nodeToMap((Node) o));//性能上不能代替
+        String internalId = getInternalId(node);
         if(!keysSet.contains(internalId)){
             keysSet.add(internalId);
-            collection.add((T)nodeToMap(node,internalId));
+            collection.add(nodeToMap(node,internalId));
+            return true;
         }
+        return false;
     }
 
     public static List<HashMap<String, Object>> getGraphNode(String cypherSql,boolean matchNodeTypeOnly){//默认去重
@@ -323,7 +486,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                 String key = entry.getKey();
                                 rss.put(key, entry.getValue());
                             }
-                            rss.put("internalId", internalId);
+                            rss.put(Neo4jUtil.internalIdField, internalId);
                             rss.put("sourceId", sourceId);
                             rss.put("targetId", targetId);
                             ents.add(rss);
@@ -394,7 +557,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                     String key = entry.getKey();
                                     rss.put(key, entry.getValue());
                                 }
-                                rss.put("internalId", internalId);
+                                rss.put(Neo4jUtil.internalIdField, internalId);
                                 internalIds.add(internalId);
                             }
                             if (!rss.isEmpty()) {
@@ -410,7 +573,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                 String key = entry.getKey();
                                 rShips.put(key, entry.getValue());
                             }
-                            rShips.put("internalId", internalId);
+                            rShips.put(Neo4jUtil.internalIdField, internalId);
                             rShips.put("sourceId", sourceId);
                             rShips.put("targetId", targetId);
                             ships.add(rShips);
@@ -425,7 +588,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                         String key = entry.getKey();
                                         rss.put(key, entry.getValue());
                                     }
-                                    rss.put("internalId", internalId);
+                                    rss.put(Neo4jUtil.internalIdField, internalId);
                                     internalIds.add(internalId);
                                 }
                                 if (!rss.isEmpty()) {
@@ -442,7 +605,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                     String key = entry.getKey();
                                     rShips.put(key, entry.getValue());
                                 }
-                                rShips.put("internalId", internalId);
+                                rShips.put(Neo4jUtil.internalIdField, internalId);
                                 rShips.put("sourceId", sourceId);
                                 rShips.put("targetId", targetId);
                                 ships.add(rShips);
@@ -461,7 +624,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                                     String key = entry.getKey();
                                     rShips.put(key, entry.getValue());
                                 }
-                                rShips.put("internalId", internalId);
+                                rShips.put(Neo4jUtil.internalIdField, internalId);
                                 rShips.put("sourceId", sourceId);
                                 rShips.put("targetId", targetId);
                                 ships.add(rShips);
@@ -713,7 +876,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
                         String key = entry.getKey();
                         ret.put(key, entry.getValue());
                     }
-                    ret.put("internalId", internalId);
+                    ret.put(Neo4jUtil.internalIdField, internalId);
                 }
             }
         } catch (Exception e) {
@@ -730,7 +893,7 @@ public class Neo4jUtil implements AutoCloseable {//仅仅将https://github.com/M
         Iterator<HashMap<String, Object>> it = list.iterator();
         while (it.hasNext()) {
             HashMap<String, Object> map = it.next();
-            String internalId = (String) map.get("internalId");
+            String internalId = (String) map.get(Neo4jUtil.internalIdField);
             int beforeSize = keysSet.size();
             keysSet.add(internalId);
             int afterSize = keysSet.size();

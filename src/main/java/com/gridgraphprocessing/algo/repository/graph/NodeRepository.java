@@ -22,7 +22,7 @@ public interface NodeRepository extends Neo4jRepository<BaseNode, Long> {
 //    @Query("MATCH (n:CONDUCTIVEEQUIPMENT) RETURN n")
 //    List<Device> findAllDevices();//获取节点列表并映射到各子类上，遇到无映射子类的节点会报错；可用默认实现的findAll(Example.of(new Device()))代替
 
-    //__特殊的自定义Cypher__
+    //__特殊的自定义Cypher__//toDO 此处搜索cypher为旧版本
     @Query("MATCH (targetCB:DMS_CB_DEVICE{id: $id}),\n" +
             "      (busBarSections:BUSBARSECTION{dync_component_id: targetCB.dync_component_id, component_id: targetCB.component_id})\n" +
             "WITH targetCB, collect(busBarSections) AS endNodes\n" +

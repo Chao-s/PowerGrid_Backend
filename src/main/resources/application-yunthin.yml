@@ -11,7 +11,7 @@ spring:
         uri: bolt://localhost:7687 #neo4j://对应4.0?
     datasource:
         username: root
-        password: 123456
+        password: root
         url: jdbc:mysql://localhost:3306/power_grid?serverTimezone=GMT&useSSL=false
         driver-class-name: com.mysql.cj.jdbc.Driver
 #        type: com.zaxxer.hikari.HikariDataSource
@@ -19,5 +19,3 @@ spring:
         hibernate:
             ddl-auto: update
         show-sql: false
-#    profiles:
-#        active: yunthin
